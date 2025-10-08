@@ -3,15 +3,40 @@ import * as cheerio from 'cheerio'
 
 async function getHtml(url) {
     const res = await axios.get(url, {
-        headers: { "User-Agent": "Mozilla/5.0" },
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
+        },
+        maxRedirects: 5, // Limit redirects to prevent infinite loops
+        timeout: 10000, // 10 second timeout
+        validateStatus: function (status) {
+            return status >= 200 && status < 300; // Only resolve for 2xx status codes
+        },
+        followRedirects: true // Explicitly enable redirect following
     });
     return res.data;
 }
 
 async function getSoupAndHtml(url) {
-    const html = await getHtml(url);
-    const $ = cheerio.load(html);
-    return { $, html };
+    try {
+        const html = await getHtml(url);
+        const $ = cheerio.load(html);
+        return { $, html };
+    } catch (error) {
+        if (error.code === 'ERR_FR_TOO_MANY_REDIRECTS') {
+            throw new Error(`Too many redirects for URL: ${url}. The website may have redirect loops.`);
+        } else if (error.code === 'ECONNABORTED') {
+            throw new Error(`Request timeout for URL: ${url}`);
+        } else if (error.response) {
+            throw new Error(`HTTP ${error.response.status}: ${error.response.statusText} for URL: ${url}`);
+        } else {
+            throw new Error(`Network error for URL: ${url}: ${error.message}`);
+        }
+    }
 }
 
 // ---------- Text fields ----------
@@ -208,20 +233,33 @@ export async function scrapeSingleProduct(url) {
 // ---------- Find URL by SKU ----------
 export async function findUrlBySku(sku) {
     const searchUrl = `https://helikon-tex.com/en/catalogsearch/result/?q=${sku}&___store=en_usd`;
-    const html = await getHtml(searchUrl);
-    const $ = cheerio.load(html);
 
-    const productDivs = $("div.product-item");
-    if (!productDivs.length) {
-        throw new Error(`No product url found with SKU: ${sku}`);
+    try {
+        const html = await getHtml(searchUrl);
+        const $ = cheerio.load(html);
+
+        const productDivs = $("div.product-item");
+        if (!productDivs.length) {
+            throw new Error(`No product url found with SKU: ${sku}`);
+        }
+
+        const aTag = productDivs.first().find("a[href]");
+        if (!aTag.length) {
+            throw new Error(`No product link found with SKU: ${sku}`);
+        }
+
+        return aTag.attr("href");
+    } catch (error) {
+        if (error.code === 'ERR_FR_TOO_MANY_REDIRECTS') {
+            throw new Error(`Too many redirects when searching for SKU: ${sku}. The search page may have redirect loops.`);
+        } else if (error.code === 'ECONNABORTED') {
+            throw new Error(`Search timeout for SKU: ${sku}`);
+        } else if (error.response) {
+            throw new Error(`Search failed with HTTP ${error.response.status} for SKU: ${sku}`);
+        } else {
+            throw new Error(`Search error for SKU: ${sku}: ${error.message}`);
+        }
     }
-
-    const aTag = productDivs.first().find("a[href]");
-    if (!aTag.length) {
-        throw new Error(`No product link found with SKU: ${sku}`);
-    }
-
-    return aTag.attr("href");
 }
 
 // Example: scrape Helikon product by SKU

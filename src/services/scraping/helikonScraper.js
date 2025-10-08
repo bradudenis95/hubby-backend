@@ -1,24 +1,73 @@
 import axios from 'axios'
 import * as cheerio from 'cheerio'
 
-async function getHtml(url) {
-    const res = await axios.get(url, {
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1"
-        },
-        maxRedirects: 5, // Limit redirects to prevent infinite loops
-        timeout: 10000, // 10 second timeout
-        validateStatus: function (status) {
-            return status >= 200 && status < 300; // Only resolve for 2xx status codes
-        },
-        followRedirects: true // Explicitly enable redirect following
-    });
-    return res.data;
+async function getHtml(url, retries = 3) {
+    console.log(`[getHtml] Making request to: ${url} (attempt ${4 - retries}/3)`);
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            const res = await axios.get(url, {
+                headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache"
+                },
+                maxRedirects: 3, // Reduced redirects to prevent loops
+                timeout: 30000, // 30 second timeout
+                validateStatus: function (status) {
+                    return status >= 200 && status < 300; // Only resolve for 2xx status codes
+                },
+                followRedirects: true, // Explicitly enable redirect following
+                maxContentLength: 50 * 1024 * 1024, // 50MB max content length
+                decompress: true // Enable automatic decompression
+            });
+            console.log(`[getHtml] Success on attempt ${attempt}, status: ${res.status}, content length: ${res.data.length}`);
+            console.log(`[getHtml] Final URL after redirects: ${res.request.res.responseUrl || url}`);
+            return res.data;
+        } catch (error) {
+            console.error(`[getHtml] Attempt ${attempt} failed:`, error.message);
+            console.error(`[getHtml] Error code:`, error.code);
+
+            // If it's a redirect error, try with different settings
+            if (error.code === 'ERR_FR_TOO_MANY_REDIRECTS') {
+                console.log(`[getHtml] Redirect loop detected, trying with no redirects...`);
+                try {
+                    const res = await axios.get(url, {
+                        headers: {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                            "Accept-Language": "en-US,en;q=0.5",
+                            "Accept-Encoding": "gzip, deflate, br",
+                            "Connection": "keep-alive",
+                            "Upgrade-Insecure-Requests": "1"
+                        },
+                        maxRedirects: 0, // No redirects
+                        timeout: 30000,
+                        validateStatus: function (status) {
+                            return status >= 200 && status < 400; // Accept redirects but don't follow them
+                        },
+                        followRedirects: false
+                    });
+                    console.log(`[getHtml] Success with no redirects, status: ${res.status}`);
+                    return res.data;
+                } catch (noRedirectError) {
+                    console.error(`[getHtml] No redirect approach also failed:`, noRedirectError.message);
+                }
+            }
+
+            if (attempt === retries) {
+                console.error(`[getHtml] All ${retries} attempts failed for URL: ${url}`);
+                throw error;
+            }
+            console.log(`[getHtml] Retrying in 2 seconds...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+    }
 }
 
 async function getSoupAndHtml(url) {
@@ -198,58 +247,111 @@ function buildVariantsFromCfg(cfg) {
 
 // ---------- Main Scraper ----------
 export async function scrapeSingleProduct(url) {
-    const { $, html } = await getSoupAndHtml(url);
+    console.log(`[scrapeSingleProduct] Starting to scrape product from: ${url}`);
 
-    const data = { url };
-    data.name = extractName($);
-    data.description = extractDescription($);
-    data.specification = extractSpec($);
-    data.materials = extractMaterials($);
-    data.price = extractBasePrice($);
+    try {
+        const { $, html } = await getSoupAndHtml(url);
+        console.log(`[scrapeSingleProduct] Successfully loaded HTML and Cheerio`);
 
-    const gallery = extractInitialImages(html);
-    data.main_image = gallery[0] || null;
-    data.images = gallery.length > 1 ? gallery.slice(1) : [];
+        const data = { url };
+        console.log(`[scrapeSingleProduct] Extracting product name...`);
+        data.name = extractName($);
+        console.log(`[scrapeSingleProduct] Product name: ${data.name}`);
 
-    const cfg = parseConfigurableJson(html);
-    if (cfg) {
-        data.variants = buildVariantsFromCfg(cfg);
-    } else {
-        const sku = data.specification?.SKU;
-        data.variants = [
-            {
-                sku,
-                color: null,
-                price: data.price,
-                availability: null,
-                main_image: data.main_image,
-            },
-        ];
+        console.log(`[scrapeSingleProduct] Extracting description...`);
+        data.description = extractDescription($);
+        console.log(`[scrapeSingleProduct] Description length: ${data.description ? data.description.length : 0}`);
+
+        console.log(`[scrapeSingleProduct] Extracting specifications...`);
+        data.specification = extractSpec($);
+        console.log(`[scrapeSingleProduct] Specifications:`, data.specification);
+
+        console.log(`[scrapeSingleProduct] Extracting materials...`);
+        data.materials = extractMaterials($);
+        console.log(`[scrapeSingleProduct] Materials:`, data.materials);
+
+        console.log(`[scrapeSingleProduct] Extracting price...`);
+        data.price = extractBasePrice($);
+        console.log(`[scrapeSingleProduct] Price: ${data.price}`);
+
+        console.log(`[scrapeSingleProduct] Extracting images...`);
+        const gallery = extractInitialImages(html);
+        console.log(`[scrapeSingleProduct] Found ${gallery.length} images`);
+        data.main_image = gallery[0] || null;
+        data.images = gallery.length > 1 ? gallery.slice(1) : [];
+
+        console.log(`[scrapeSingleProduct] Parsing configurable options...`);
+        const cfg = parseConfigurableJson(html);
+        if (cfg) {
+            console.log(`[scrapeSingleProduct] Found configurable options, building variants...`);
+            data.variants = buildVariantsFromCfg(cfg);
+            console.log(`[scrapeSingleProduct] Built ${data.variants.length} variants`);
+        } else {
+            console.log(`[scrapeSingleProduct] No configurable options, creating single variant...`);
+            const sku = data.specification?.SKU;
+            data.variants = [
+                {
+                    sku,
+                    color: null,
+                    price: data.price,
+                    availability: null,
+                    main_image: data.main_image,
+                },
+            ];
+            console.log(`[scrapeSingleProduct] Created single variant with SKU: ${sku}`);
+        }
+
+        console.log(`[scrapeSingleProduct] Scraping completed successfully for: ${data.name}`);
+        return data;
+    } catch (error) {
+        console.error(`[scrapeSingleProduct] Error scraping product from ${url}:`, error.message);
+        throw error;
     }
-
-    return data;
 }
 
 // ---------- Find URL by SKU ----------
 export async function findUrlBySku(sku) {
+    console.log(`[findUrlBySku] Starting search for SKU: ${sku}`);
     const searchUrl = `https://helikon-tex.com/en/catalogsearch/result/?q=${sku}&___store=en_usd`;
+    console.log(`[findUrlBySku] Search URL: ${searchUrl}`);
 
     try {
+        console.log(`[findUrlBySku] Making request to search page...`);
         const html = await getHtml(searchUrl);
+        console.log(`[findUrlBySku] Successfully received HTML, length: ${html.length}`);
+
         const $ = cheerio.load(html);
+        console.log(`[findUrlBySku] Cheerio loaded successfully`);
 
         const productDivs = $("div.product-item");
+        console.log(`[findUrlBySku] Found ${productDivs.length} product items`);
+
         if (!productDivs.length) {
-            throw new Error(`No product url found with SKU: ${sku}`);
+            console.log(`[findUrlBySku] No product items found, checking for alternative selectors...`);
+            // Try alternative selectors
+            const altDivs = $(".product-item, .item, .product, [data-product-id]");
+            console.log(`[findUrlBySku] Alternative selectors found ${altDivs.length} items`);
+
+            if (!altDivs.length) {
+                console.log(`[findUrlBySku] Page content preview:`, html.substring(0, 500));
+                throw new Error(`No product url found with SKU: ${sku}`);
+            }
         }
 
         const aTag = productDivs.first().find("a[href]");
+        console.log(`[findUrlBySku] Found ${aTag.length} links in first product item`);
+
         if (!aTag.length) {
             throw new Error(`No product link found with SKU: ${sku}`);
         }
 
-        return aTag.attr("href");
+        const href = aTag.attr("href");
+        console.log(`[findUrlBySku] Found product URL: ${href}`);
+        return href;
     } catch (error) {
+        console.error(`[findUrlBySku] Error occurred:`, error.message);
+        console.error(`[findUrlBySku] Error code:`, error.code);
+
         if (error.code === 'ERR_FR_TOO_MANY_REDIRECTS') {
             throw new Error(`Too many redirects when searching for SKU: ${sku}. The search page may have redirect loops.`);
         } else if (error.code === 'ECONNABORTED') {
@@ -264,28 +366,35 @@ export async function findUrlBySku(sku) {
 
 // Example: scrape Helikon product by SKU
 export const scrapeProduct = async (sku, url) => {
+    console.log(`[scrapeProduct] Starting scrape process for SKU: ${sku}, URL: ${url}`);
     const BASE = "https://helikon-tex.com";
     let productUrl = '';
+
     if (url) {
         productUrl = url;
+        console.log(`[scrapeProduct] Using provided URL: ${productUrl}`);
     } else if (sku) {
+        console.log(`[scrapeProduct] Searching for SKU: ${sku}`);
         try {
             productUrl = await findUrlBySku(sku);
+            console.log(`[scrapeProduct] Found product URL: ${productUrl}`);
         } catch (error) {
-            console.log(error);
-            throw new Error("No product found on scrapeProduct");
+            console.error(`[scrapeProduct] Error finding URL for SKU ${sku}:`, error.message);
+            throw new Error(`No product found with SKU: ${sku}. ${error.message}`);
         }
     } else {
-        console.log("No SKU or URL provided");
+        console.error(`[scrapeProduct] No SKU or URL provided`);
         throw new Error("No SKU or URL provided");
     }
 
     try {
-        const product = await scrapeSingleProduct(productUrl)
-        return product
+        console.log(`[scrapeProduct] Starting to scrape product from: ${productUrl}`);
+        const product = await scrapeSingleProduct(productUrl);
+        console.log(`[scrapeProduct] Successfully scraped product: ${product.name}`);
+        return product;
     } catch (error) {
-        console.log(error);
-        throw new Error(error);
+        console.error(`[scrapeProduct] Error scraping product:`, error.message);
+        throw new Error(`Failed to scrape product: ${error.message}`);
     }
 }
 

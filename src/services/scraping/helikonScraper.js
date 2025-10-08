@@ -213,12 +213,12 @@ export async function findUrlBySku(sku) {
 
     const productDivs = $("div.product-item");
     if (!productDivs.length) {
-        throw new Error("No product found");
+        throw new Error(`No product url found with SKU: ${sku}`);
     }
 
     const aTag = productDivs.first().find("a[href]");
     if (!aTag.length) {
-        throw new Error("No product link found");
+        throw new Error(`No product link found with SKU: ${sku}`);
     }
 
     return aTag.attr("href");
@@ -234,7 +234,7 @@ export const scrapeProduct = async (sku, url) => {
         try {
             productUrl = await findUrlBySku(sku);
         } catch (error) {
-            throw new Error("No product found");
+            throw new Error("No product found on scrapeProduct");
         }
     } else {
         throw new Error("No SKU or URL provided");

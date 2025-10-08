@@ -253,7 +253,7 @@ export async function scrapeSingleProduct(url) {
         const { $, html } = await getSoupAndHtml(url);
         console.log(`[scrapeSingleProduct] Successfully loaded HTML and Cheerio`);
 
-        const data = { url };
+        const data = { productUrl: url };
         console.log(`[scrapeSingleProduct] Extracting product name...`);
         data.name = extractName($);
         console.log(`[scrapeSingleProduct] Product name: ${data.name}`);

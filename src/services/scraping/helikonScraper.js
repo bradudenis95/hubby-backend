@@ -234,9 +234,11 @@ export const scrapeProduct = async (sku, url) => {
         try {
             productUrl = await findUrlBySku(sku);
         } catch (error) {
+            console.log(error);
             throw new Error("No product found on scrapeProduct");
         }
     } else {
+        console.log("No SKU or URL provided");
         throw new Error("No SKU or URL provided");
     }
 
@@ -244,7 +246,8 @@ export const scrapeProduct = async (sku, url) => {
         const product = await scrapeSingleProduct(productUrl)
         return product
     } catch (error) {
-        throw new Error("No product found");
+        console.log(error);
+        throw new Error(error);
     }
 }
 
